@@ -11,6 +11,13 @@
 class ByteStream {
   private:
     // Your code here -- add private members as necessary.
+    std::deque<char> _stream;
+    size_t _size;
+    size_t _capacity;
+    size_t _nwritten;
+    size_t _nread;
+    bool _eof;
+    bool _input_ended;
 
     // Hint: This doesn't need to be a sophisticated data structure at
     // all, but if any of your tests are taking longer than a second,
