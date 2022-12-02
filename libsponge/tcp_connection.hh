@@ -1,115 +1,168 @@
-#ifndef SPONGE_LIBSPONGE_TCP_FACTORED_HH
-#define SPONGE_LIBSPONGE_TCP_FACTORED_HH
+#include "tcp_connection.hh"
 
-#include "tcp_config.hh"
-#include "tcp_receiver.hh"
-#include "tcp_sender.hh"
-#include "tcp_state.hh"
+#include <iostream>
+#include <limits>
 
-//! \brief A complete endpoint of a TCP connection
-class TCPConnection {
-  private:
-    TCPConfig _cfg;
-    TCPReceiver _receiver{_cfg.recv_capacity};
-    TCPSender _sender{_cfg.send_capacity, _cfg.rt_timeout, _cfg.fixed_isn};
+// Dummy implementation of a TCP connection
 
-    //! outbound queue of segments that the TCPConnection wants sent
-    std::queue<TCPSegment> _segments_out{};
+// For Lab 4, please replace with a real implementation that passes the
+// automated checks run by `make check`.
 
-    //! Should the TCPConnection stay active (and keep ACKing)
-    //! for 10 * _cfg.rt_timeout milliseconds after both streams have ended,
-    //! in case the remote TCPConnection doesn't know we've received its whole stream?
-    bool _linger_after_streams_finish{true};
-    bool _active{true};
-    size_t _ms_since_last_segment_received{0};
-    bool _connect_initiated{0};
-    bool _rst{0};
+template <typename... Targs>
+void DUMMY_CODE(Targs &&... /* unused */) {}
 
-    //process TCPSegment basically
-    void popTCPSegment(TCPSegment &seg);
+using namespace std;
 
-    //send ack back
-    void send_ack_back();
+size_t TCPConnection::remaining_outbound_capacity() const { return _sender.stream_in().remaining_capacity(); }
 
-    //test the end of TCP connection
-    void test_end();
+size_t TCPConnection::bytes_in_flight() const { return _sender.bytes_in_flight(); }
 
-    // fill queue from _sender.segments_out() to _segments_out
-    void fill_queue();
+size_t TCPConnection::unassembled_bytes() const { return _receiver.unassembled_bytes(); }
 
-  public:
-    //! \name "Input" interface for the writer
-    //!@{
+size_t TCPConnection::time_since_last_segment_received() const { return _ms_since_last_segment_received; }
 
-    //! \brief Initiate a connection by sending a SYN segment
-    void connect();
+void TCPConnection::segment_received(const TCPSegment &seg) {
+    _ms_since_last_segment_received = 0;
+    if (seg.header().ack && _sender.syn_sent()) {
+        if(!_sender.ack_received(seg.header().ackno, seg.header().win)){  // fsm_ack_rst_relaxed: ack in the future -> sent ack back
+            send_ack_back();
+            return;
+        }
+        while (!_sender.segments_out().empty()) {
+            fill_queue();
+            _sender.fill_window();
+        }
+    }
+    // ignore out of window RST
+    if (seg.header().rst) {
+        _rst = 1;
+        _sender.stream_in().set_error();
+        _receiver.stream_out().set_error();
+        return;
+    }
 
-    //! \brief Write data to the outbound byte stream, and send it over TCP if possible
-    //! \returns the number of bytes from `data` that were actually written.
-    size_t write(const std::string &data);
+    if(!_receiver.segment_received(seg)){
+        send_ack_back();
+        return;
+    }
+    
+    if (seg.header().syn && !_sender.syn_sent()) {
+        connect();
+        return;
+    }
+    else if(seg.header().fin){
+        if(!_sender.fin_sent())      //send FIN+ACK
+            _sender.fill_window();
+        if (_sender.segments_out().empty())     //send ACK
+            _sender.send_empty_segment();  
+        fill_queue();
+    }
+    else if(seg.length_in_sequence_space()){
+        send_ack_back();
+        return;
+    }
+    test_end();
+}
 
-    //! \returns the number of `bytes` that can be written right now.
-    size_t remaining_outbound_capacity() const;
+bool TCPConnection::active() const { 
+    return (!_clean_shutdown) && (!_unclean_shutdown) && (!_rst); 
+}
 
-    //! \brief Shut down the outbound byte stream (still allows reading incoming data)
-    void end_input_stream();
-    //!@}
+size_t TCPConnection::write(const string &data) {
+    size_t size=_sender.stream_in().write(data);
+    _sender.fill_window();
+    if (!_sender.segments_out().empty()) 
+        fill_queue();
+    test_end();
+    return size;
+}
 
-    //! \name "Output" interface for the reader
-    //!@{
+//! \param[in] ms_since_last_tick number of milliseconds since the last call to this method
+void TCPConnection::tick(const size_t ms_since_last_tick) { 
+    _sender.tick(ms_since_last_tick); 
+    _ms_since_last_segment_received+=ms_since_last_tick;
+    fill_queue();
+    test_end();
+}
 
-    //! \brief The inbound byte stream received from the peer
-    ByteStream &inbound_stream() { return _receiver.stream_out(); }
-    //!@}
+void TCPConnection::end_input_stream() {
+    _sender.stream_in().end_input();
+    _sender.fill_window();
+    fill_queue();
+    test_end();
+}
 
-    //! \name Accessors used for testing
+void TCPConnection::connect() {
+    _sender.fill_window();
+    if(!_rst) _rst=0;
+    fill_queue();
+}
 
-    //!@{
-    //! \brief number of bytes sent and not yet acknowledged, counting SYN/FIN each as one byte
-    size_t bytes_in_flight() const;
-    //! \brief number of bytes not yet reassembled
-    size_t unassembled_bytes() const;
-    //! \brief Number of milliseconds since the last segment was received
-    size_t time_since_last_segment_received() const;
-    //!< \brief summarize the state of the sender, receiver, and the connection
-    TCPState state() const { return {_sender, _receiver, active(), _linger_after_streams_finish}; };
-    //!@}
+TCPConnection::~TCPConnection() {
+    try {
+        if (active()) {
+            cerr << "Warning: Unclean shutdown of TCPConnection\n";
+            // send a RST segment to the peer
+            _rst=1;
+            _sender.send_empty_segment();
+            fill_queue();
+        }
+    } catch (const exception &e) {
+        std::cerr << "Exception destructing TCP FSM: " << e.what() << std::endl;
+    }
+}
 
-    //! \name Methods for the owner or operating system to call
-    //!@{
+void TCPConnection::popTCPSegment(TCPSegment &seg){
+    // send a segment
+    // reset condition
+    seg = _sender.segments_out().front();
+    _sender.segments_out().pop();
+    if(_rst || (_sender.consecutive_retransmissions() > TCPConfig::MAX_RETX_ATTEMPTS)) {
+        _rst=1;
+        seg.header().rst = true;
+        _sender.stream_in().set_error();
+        _receiver.stream_out().set_error();
+    } else {
+        if (_receiver.ackno().has_value()) {
+            seg.header().ackno = _receiver.ackno().value();
+            seg.header().ack = true;
+        }
+        // TCPReceiver wants to advertise a window size
+        // that’s bigger than will fit in the TCPSegment::header().win field
+        if (_receiver.window_size() < numeric_limits<uint16_t>::max())
+            seg.header().win = _receiver.window_size();
+        else
+            seg.header().win = numeric_limits<uint16_t>::max();
+    }
+}
 
-    //! Called when a new segment has been received from the network
-    void segment_received(const TCPSegment &seg);
+//send ack back
+void TCPConnection::send_ack_back(){
+    //if the ackno is missing, don't send back an ACK.
+    if(!_receiver.ackno().has_value()) return;
 
-    //! Called periodically when time elapses
-    void tick(const size_t ms_since_last_tick);
+    //sometimes the TCPSender will send a segment in ack_received()
+    if(_sender.segments_out().empty())
+        _sender.send_empty_segment();
+    fill_queue();
+}
 
-    //! \brief TCPSegments that the TCPConnection has enqueued for transmission.
-    //! \note The owner or operating system will dequeue these and
-    //! put each one into the payload of a lower-layer datagram (usually Internet datagrams (IP),
-    //! but could also be user datagrams (UDP) or any other kind).
-    std::queue<TCPSegment> &segments_out() { return _segments_out; }
+//test the end of TCP connection
+void TCPConnection::test_end(){
+    if (_receiver.stream_out().input_ended() && (!_sender.stream_in().eof()) && _sender.syn_sent())
+        _linger_after_streams_finish = false;
+    if(_receiver.stream_out().eof() && _sender.stream_in().eof() && _sender.bytes_in_flight()==0 && _sender.fin_sent()){
+        //bytes_in_flight==0 => state: FIN_ACKED
+        _clean_shutdown |= (!_linger_after_streams_finish);
+        _unclean_shutdown |= (_ms_since_last_segment_received >= 10 * _cfg.rt_timeout);
+    }
+}
 
-    //! \brief Is the connection still alive in any way?
-    //! \returns `true` if either stream is still running or if the TCPConnection is lingering
-    //! after both streams have finished (e.g. to ACK retransmissions from the peer)
-    bool active() const;
-    //!@}
-
-    //! Construct a new connection from a configuration
-    explicit TCPConnection(const TCPConfig &cfg) : _cfg{cfg} {}
-
-    //! \name construction and destruction
-    //! moving is allowed; copying is disallowed; default construction not possible
-
-    //!@{
-    ~TCPConnection();  //!< destructor sends a RST if the connection is still open
-    TCPConnection() = delete;
-    TCPConnection(TCPConnection &&other) = default;
-    TCPConnection &operator=(TCPConnection &&other) = default;
-    TCPConnection(const TCPConnection &other) = delete;
-    TCPConnection &operator=(const TCPConnection &other) = delete;
-    //!@}
-};
-
-#endif  // SPONGE_LIBSPONGE_TCP_FACTORED_HH
+//fill queue from _sender.segments_out() to _segments_out
+void TCPConnection::fill_queue(){
+    while (!_sender.segments_out().empty()) {
+        TCPSegment seg;
+        popTCPSegment(seg);
+        _segments_out.push(seg);
+    }
+}
