@@ -12,7 +12,7 @@
 
 - [ ] Lab 6: the IP router 
 
-- [ ] Lab 7: Everything Together 
+Pass all the tests of Lab 0-4
 
 For build prereqs, see [the VM setup instructions](https://web.stanford.edu/class/cs144/vm_howto).
 
@@ -36,9 +36,9 @@ You can use the `-j` switch to build in parallel, e.g.,
 
 To test (after building; make sure you've got the [build prereqs](https://web.stanford.edu/class/cs144/vm_howto) installed!)
 
-    $ make check_labN *(replacing N with a checkpoint number)*
+    $ make check
 
-The first time you run `make check_lab...`, it will run `sudo` to configure two
+The first time you run `make check`, it will run `sudo` to configure two
 [TUN](https://www.kernel.org/doc/Documentation/networking/tuntap.txt) devices for use during
 testing.
 
@@ -69,7 +69,7 @@ The following targets are supported:
 
 Of course, you can combine all of the above, e.g.,
 
-    $ CLANG_TIDY=clang-tidy-6.0 CXX=clang++-6.0 .. -DCMAKE_BUILD_TYPE=Debug
+    $ CLANG_TIDY=clang-tidy-6.0 CXX=clang++-6.0 cmake .. -DCMAKE_BUILD_TYPE=Debug
 
 **Note:** if you want to change `CC`, `CXX`, `CLANG_TIDY`, or `CLANG_FORMAT`, you need to remove
 `build/CMakeCache.txt` and re-run cmake. (This isn't necessary for `CMAKE_BUILD_TYPE`.)
@@ -79,6 +79,14 @@ Of course, you can combine all of the above, e.g.,
 To generate documentation (you'll need `doxygen`; output will be in `build/doc/`):
 
     $ make doc
+
+To lint (you'll need `clang-tidy`):
+
+    $ make -j$(nproc) tidy
+
+To run cppcheck (you'll need `cppcheck`):
+
+    $ make cppcheck
 
 To format (you'll need `clang-format`):
 
