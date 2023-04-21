@@ -1,18 +1,16 @@
-- [x] Lab 0: networking warmup
+- [x] networking warmup
 
-- [x] Lab 1: stitching substrings into a byte stream
+- [x] stitching substrings into a byte stream
 
-- [x] Lab 2: the TCP receiver
+- [x] the TCP receiver
 
-- [x] Lab 3: the TCP sender
+- [x] the TCP sender
 
-- [x] Lab 4: the TCP connection
+- [x] the TCP connection
 
-- [ ] Lab 5: the network interface
+- [ ] the network interface
 
-- [ ] Lab 6: the IP router 
-
-Pass all the tests of Lab 0-4
+- [ ] the IP router 
 
 For build prereqs, see [the VM setup instructions](https://web.stanford.edu/class/cs144/vm_howto).
 
